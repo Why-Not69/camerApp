@@ -34,6 +34,16 @@ class CameraWifi(context: Context) {
         null
     }
 
+    /** Второй замок — «полная мощность»: на части телефонов работает он, а не «низкая задержка». */
+    @Suppress("DEPRECATION")
+    private val highPerfLock: WifiManager.WifiLock? = try {
+        context.applicationContext.getSystemService(WifiManager::class.java)!!
+            .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "a6600remote-highperf")
+            .apply { setReferenceCounted(false) }
+    } catch (_: Exception) {
+        null
+    }
+
     /** Вызывается, если сеть камеры пропала (камера выключилась, ушли слишком далеко). */
     var onLost: (() -> Unit)? = null
 
@@ -63,6 +73,10 @@ class CameraWifi(context: Context) {
                 cm.bindProcessToNetwork(network)
                 try {
                     lowLatencyLock?.acquire()
+                } catch (_: Exception) {
+                }
+                try {
+                    highPerfLock?.acquire()
                 } catch (_: Exception) {
                 }
                 result.complete(network)
@@ -96,6 +110,10 @@ class CameraWifi(context: Context) {
         cm.bindProcessToNetwork(null)
         try {
             if (lowLatencyLock?.isHeld == true) lowLatencyLock.release()
+        } catch (_: Exception) {
+        }
+        try {
+            if (highPerfLock?.isHeld == true) highPerfLock.release()
         } catch (_: Exception) {
         }
     }

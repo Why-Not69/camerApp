@@ -320,7 +320,7 @@ fun CameraScreen(vm: CameraViewModel) {
             s = s,
             onBuffer = vm::setPreviewBuffer,
             onShowFps = vm::setShowFps,
-            onWifiKeepAwake = vm::setWifiKeepAwake,
+            onWifiPing = vm::setWifiPing,
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
             onRecordState = vm::recordCameraState,
@@ -1058,7 +1058,7 @@ private fun SettingsDialog(
     s: UiState,
     onBuffer: (Int) -> Unit,
     onShowFps: (Boolean) -> Unit,
-    onWifiKeepAwake: (Boolean) -> Unit,
+    onWifiPing: (Int) -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
     onRecordState: () -> Unit,
@@ -1159,10 +1159,35 @@ private fun SettingsDialog(
                             "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
                             s.showFps, onShowFps, switchColors,
                         )
-                        SettingSwitch(
-                            "Не давать Wi‑Fi засыпать", "Постоянный обмен мелкими пакетами с камерой — против пауз в превью",
-                            s.wifiKeepAwake, onWifiKeepAwake, switchColors,
+                        Text("Не давать Wi‑Fi засыпать", color = Color.White)
+                        Text(
+                            "Как часто слать камере мелкий пакет, чтобы Wi‑Fi телефона не уходил в экономию энергии.",
+                            fontSize = 12.sp,
+                            color = Dim,
                         )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF26262B)),
+                        ) {
+                            listOf(0 to "Выкл", 20 to "20 мс", 10 to "10 мс", 5 to "5 мс").forEach { (ms, label) ->
+                                val sel = s.wifiPingMs == ms
+                                Text(
+                                    label,
+                                    color = if (sel) Color.Black else Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (sel) Accent else Color.Transparent)
+                                        .clickable { onWifiPing(ms) }
+                                        .padding(vertical = 10.dp),
+                                )
+                            }
+                        }
                         OutlinedButton(onClick = onRecordState, modifier = Modifier.fillMaxWidth()) {
                             Text("Записать состояние камеры", color = Color.White)
                         }

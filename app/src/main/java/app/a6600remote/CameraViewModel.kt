@@ -95,10 +95,10 @@ data class UiState(
     val timerSeconds: Int = 0,
     val countdown: Int = 0,
     val mirror: Boolean = false,
-    val previewBufferMs: Int = 600,
+    val previewBufferMs: Int = 0,
     val showFps: Boolean = false,
     /** Слать камере мелкие пакеты, чтобы Wi‑Fi телефона не уходил в экономию энергии. */
-    val wifiKeepAwake: Boolean = true,
+    val wifiPingMs: Int = 20,
     val showGrid: Boolean = false,
     val busy: Boolean = false,
     val recordingSince: Long? = null,
@@ -174,9 +174,9 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             password = prefs.getString("password", "") ?: "",
             timerSeconds = prefs.getInt("timer", 0),
             mirror = prefs.getBoolean("mirror", false),
-            previewBufferMs = prefs.getInt("bufferMs", 600),
+            previewBufferMs = prefs.getInt("bufferMs", 0),
             showFps = prefs.getBoolean("showFps", false),
-            wifiKeepAwake = prefs.getBoolean("wifiKeepAwake", true),
+            wifiPingMs = if (prefs.getBoolean("wifiKeepAwake", true)) prefs.getInt("wifiPingMs", 20) else 0,
             showGrid = prefs.getBoolean("showGrid", false),
         )
     )
@@ -326,7 +326,8 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         var socket: java.net.DatagramSocket? = null
         try {
             while (isActive) {
-                if (_state.value.wifiKeepAwake && !albumMode) {
+                val every = _state.value.wifiPingMs
+                if (every > 0 && !albumMode) {
                     try {
                         val so = socket ?: java.net.DatagramSocket().also { socket = it }
                         so.send(packet)
@@ -335,7 +336,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                         socket = null
                         delay(500)
                     }
-                    delay(20)
+                    delay(every.toLong())
                 } else {
                     delay(300)
                 }
@@ -802,10 +803,11 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(showGrid = next) }
     }
 
-    fun setWifiKeepAwake(on: Boolean) {
-        prefs.edit().putBoolean("wifiKeepAwake", on).apply()
-        _state.update { it.copy(wifiKeepAwake = on) }
-        log("Не давать Wi‑Fi засыпать: ${if (on) "вкл" else "выкл"}")
+    /** Как часто слать камере пакет, чтобы Wi‑Fi не засыпал; 0 — не слать. */
+    fun setWifiPing(ms: Int) {
+        prefs.edit().putInt("wifiPingMs", ms).putBoolean("wifiKeepAwake", ms > 0).apply()
+        _state.update { it.copy(wifiPingMs = ms) }
+        log("Пакеты против сна Wi‑Fi: ${if (ms > 0) "каждые $ms мс" else "выкл"}")
     }
 
     fun setShowFps(on: Boolean) {

@@ -14,8 +14,8 @@ android {
         applicationId = "app.a6600remote"
         minSdk = 29          // Android 10+: нужен WifiNetworkSpecifier
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.13"
+        versionCode = 14
+        versionName = "0.14"
     }
 
     buildTypes {

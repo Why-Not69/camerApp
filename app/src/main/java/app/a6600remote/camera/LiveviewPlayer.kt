@@ -37,7 +37,7 @@ class LiveviewPlayer {
         set(value) { field = value; redrawRequested = true }
 
     /** Запас буфера, мс. 0 — показывать каждый кадр сразу (минимальная задержка). */
-    @Volatile var bufferMs = 600
+    @Volatile var bufferMs = 0
 
     /** Время последнего полученного кадра (SystemClock.elapsedRealtime). */
     @Volatile var lastFrameAt = 0L
