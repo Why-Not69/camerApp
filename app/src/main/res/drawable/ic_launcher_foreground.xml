@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Иконка camerApp: диафрагма объектива + точка записи -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- корпус объектива -->
+    <path android:fillColor="#26262C"
+        android:pathData="M54,25 A29,29 0 1,1 53.99,25 Z" />
+    <path android:fillColor="#FFC21A" android:pathData="M56.20,45.79 L62.21,51.80 L76.10,65.69 L77.44,62.70 L78.37,59.57 L78.89,56.34 L78.98,53.07 L78.65,49.82 L77.89,46.64 L76.73,43.58 L75.17,40.71 Z" />
+    <path android:fillColor="#F2B000" android:pathData="M62.21,51.80 L60.01,60.01 L54.93,78.98 L58.18,78.65 L61.36,77.89 L64.42,76.73 L67.29,75.17 L69.94,73.26 L72.32,71.01 L74.38,68.47 L76.10,65.69 Z" />
+    <path android:fillColor="#FFD35C" android:pathData="M60.01,60.01 L51.80,62.21 L32.83,67.29 L34.74,69.94 L36.99,72.32 L39.53,74.38 L42.31,76.10 L45.30,77.44 L48.43,78.37 L51.66,78.89 L54.93,78.98 Z" />
+    <path android:fillColor="#E5A600" android:pathData="M51.80,62.21 L45.79,56.20 L31.90,42.31 L30.56,45.30 L29.63,48.43 L29.11,51.66 L29.02,54.93 L29.35,58.18 L30.11,61.36 L31.27,64.42 L32.83,67.29 Z" />
+    <path android:fillColor="#FFC21A" android:pathData="M45.79,56.20 L47.99,47.99 L53.07,29.02 L49.82,29.35 L46.64,30.11 L43.58,31.27 L40.71,32.83 L38.06,34.74 L35.68,36.99 L33.62,39.53 L31.90,42.31 Z" />
+    <path android:fillColor="#F2B000" android:pathData="M47.99,47.99 L56.20,45.79 L75.17,40.71 L73.26,38.06 L71.01,35.68 L68.47,33.62 L65.69,31.90 L62.70,30.56 L59.57,29.63 L56.34,29.11 L53.07,29.02 Z" />
+    <!-- кольцо -->
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="2.5" android:fillColor="#00000000"
+        android:pathData="M54,25 A29,29 0 1,1 53.99,25 Z" />
+    <!-- блик -->
+    <path android:fillColor="#66FFFFFF"
+        android:pathData="M48.5,48 A3,3 0 1,1 48.49,48 Z" />
+    <!-- точка записи -->
+    <path android:fillColor="#FF3B30"
+        android:pathData="M80,26 A5,5 0 1,1 79.99,26 Z" />
+</vector>
