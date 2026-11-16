@@ -94,7 +94,6 @@ fun CameraScreen(vm: CameraViewModel) {
     val s by vm.state.collectAsState()
     val hasPicture by vm.player.hasPicture.collectAsState()
     val stats by vm.player.stats.collectAsState()
-    val wifiInfo by vm.wifiInfo.collectAsState()
     val frameAspect by vm.player.frameAspect.collectAsState()
 
     var activeParam by remember { mutableStateOf<ExpParam?>(null) }
@@ -198,7 +197,7 @@ fun CameraScreen(vm: CameraViewModel) {
 
             TopBar(
                 s = s,
-                fps = if (s.showFps) listOf(stats, wifiInfo).filter { it.isNotEmpty() }.joinToString("\n") else null,
+                fps = if (s.showFps) stats else null,
                 onGrid = vm::toggleGrid,
                 onMirror = vm::toggleMirror,
                 onSettings = { showSettings = true },
@@ -321,9 +320,6 @@ fun CameraScreen(vm: CameraViewModel) {
             s = s,
             onBuffer = vm::setPreviewBuffer,
             onShowFps = vm::setShowFps,
-            onRawSocket = vm::setRawSocket,
-            onEventPolling = vm::setEventPolling,
-            onRecordDiag = { showSettings = false; vm.recordDiagnostics() },
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
             onDisconnect = { showSettings = false; vm.disconnect() },
@@ -1060,9 +1056,6 @@ private fun SettingsDialog(
     s: UiState,
     onBuffer: (Int) -> Unit,
     onShowFps: (Boolean) -> Unit,
-    onRawSocket: (Boolean) -> Unit,
-    onEventPolling: (Int) -> Unit,
-    onRecordDiag: () -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
     onDisconnect: () -> Unit,
@@ -1071,6 +1064,7 @@ private fun SettingsDialog(
 ) {
     var ssidField by remember { mutableStateOf(s.ssid) }
     var passField by remember { mutableStateOf(s.password) }
+    var debugOpen by remember { mutableStateOf(false) }
     val switchColors = SwitchDefaults.colors(checkedTrackColor = Accent, checkedThumbColor = Color.Black)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1081,84 +1075,6 @@ private fun SettingsDialog(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Плавность превью", color = Color.White)
-                Text(
-                    "Камера отдаёт кадры неровно. Запас сглаживает их, но добавляет задержку.",
-                    fontSize = 12.sp,
-                    color = Dim,
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF26262B)),
-                ) {
-                    listOf(0 to "Быстро", 600 to "Плавно", 1200 to "Макс.").forEach { (ms, label) ->
-                        val sel = s.previewBufferMs == ms
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (sel) Accent else Color.Transparent)
-                                .clickable { onBuffer(ms) }
-                                .padding(vertical = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(label, color = if (sel) Color.Black else Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text(
-                                if (ms == 0) "без запаса" else "+%.1f с".format(ms / 1000f),
-                                color = if (sel) Color.Black.copy(alpha = 0.7f) else Dim,
-                                fontSize = 11.sp,
-                            )
-                        }
-                    }
-                }
-                SettingSwitch(
-                    "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
-                    s.showFps, onShowFps, switchColors,
-                )
-                Text("Опрос состояния камеры", color = Color.White)
-                Text(
-                    "Каждый опрос ненадолго отвлекает камеру от превью. «Редко» — раз в 4 с.",
-                    fontSize = 12.sp,
-                    color = Dim,
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF26262B)),
-                ) {
-                    listOf(0 to "Выкл", 1 to "Редко", 2 to "Постоянно").forEach { (mode, label) ->
-                        val sel = s.eventPolling == mode
-                        Text(
-                            label,
-                            color = if (sel) Color.Black else Color.White,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 14.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (sel) Accent else Color.Transparent)
-                                .clickable { onEventPolling(mode) }
-                                .padding(vertical = 10.dp),
-                        )
-                    }
-                }
-                SettingSwitch(
-                    "Свой сокет для превью", "Выкл — стандартный способ, как до версии 0.7 (для сравнения)",
-                    s.rawSocket, onRawSocket, switchColors,
-                )
-                OutlinedButton(
-                    onClick = onRecordDiag,
-                    enabled = s.phase == Phase.Ready && !s.diagRunning,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (s.diagRunning) "Идёт запись диагностики…" else "Записать диагностику 30 с", color = Color.White)
-                }
-                HorizontalDivider(color = GlassBorder)
-
                 Text("Wi‑Fi камеры", color = Color.White, fontWeight = FontWeight.SemiBold)
                 Button(
                     onClick = onScanQr,
@@ -1185,11 +1101,63 @@ private fun SettingsDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
+                if (s.phase != Phase.Idle) {
+                    TextButton(onClick = onDisconnect) { Text("Отключиться", color = RecRed) }
+                }
                 HorizontalDivider(color = GlassBorder)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = onShowLog) { Text("Журнал", color = Color.White) }
-                    if (s.phase != Phase.Idle) {
-                        TextButton(onClick = onDisconnect) { Text("Отключиться", color = RecRed) }
+                // Отладка — свёрнута по умолчанию
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { debugOpen = !debugOpen }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Отладка", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(if (debugOpen) "▲" else "▼", color = Dim)
+                }
+                if (debugOpen) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Плавность превью", color = Color.White)
+                        Text(
+                            "Камера отдаёт кадры неровно. Запас сглаживает их, но добавляет задержку.",
+                            fontSize = 12.sp,
+                            color = Dim,
+                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFF26262B)),
+                        ) {
+                            listOf(0 to "Быстро", 600 to "Плавно", 1200 to "Макс.").forEach { (ms, label) ->
+                                val sel = s.previewBufferMs == ms
+                                Column(
+                                    Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (sel) Accent else Color.Transparent)
+                                        .clickable { onBuffer(ms) }
+                                        .padding(vertical = 8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Text(label, color = if (sel) Color.Black else Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    Text(
+                                        if (ms == 0) "без запаса" else "+%.1f с".format(ms / 1000f),
+                                        color = if (sel) Color.Black.copy(alpha = 0.7f) else Dim,
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                            }
+                        }
+                        SettingSwitch(
+                            "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
+                            s.showFps, onShowFps, switchColors,
+                        )
+                        OutlinedButton(onClick = onShowLog, modifier = Modifier.fillMaxWidth()) {
+                            Text("Журнал", color = Color.White)
+                        }
                     }
                 }
             }

@@ -84,31 +84,6 @@ class LiveviewPlayer {
 
     /** Если «голый» сокет не сработал — откатываемся на HttpURLConnection. */
     @Volatile private var useRawSocket = true
-
-    /** Настройка пользователя: читать поток своим сокетом (true) или стандартно (false). */
-    @Volatile var rawSocketEnabled = true
-
-    /** Сырые кадры: поток чтения → поток декодирования. Так медленное декодирование
-     *  никогда не тормозит приём (а значит, и камеру). */
-    private class RawFrame(val bytes: ByteArray, val size: Int, val ts: Long, val arrival: Long)
-    private val rawQueue = java.util.concurrent.LinkedBlockingQueue<RawFrame>()
-    private val bytePool = ArrayBlockingQueue<ByteArray>(16)
-
-    // ---- Диагностика (пишут разные потоки) ----
-    private val diagGenerated = java.util.concurrent.atomic.AtomicInteger(0) // кадров сняла камера (по номерам)
-    private val diagNetWaitMs = java.util.concurrent.atomic.AtomicLong(0)    // суммарное ожидание сети
-    private val diagNetWaitMax = java.util.concurrent.atomic.AtomicLong(0)
-    private val diagDecodeMs = java.util.concurrent.atomic.AtomicLong(0)
-    private val diagDecodeMax = java.util.concurrent.atomic.AtomicLong(0)
-    private val diagDecoded = java.util.concurrent.atomic.AtomicInteger(0)
-    private val diagDroppedRaw = java.util.concurrent.atomic.AtomicInteger(0)
-    private var lastSeq = -1
-    @Volatile private var frameW = 0
-    @Volatile private var frameH = 0
-
-    /** Подробная строка для журнала диагностики. */
-    private val _details = MutableStateFlow("")
-    val details: StateFlow<String> = _details.asStateFlow()
     private val bytesWindow = java.util.concurrent.atomic.AtomicLong(0)
     @Volatile private var running = true
     @Volatile private var bufferResetRequested = false
@@ -125,11 +100,6 @@ class LiveviewPlayer {
     private var statStart = 0L
 
     private val renderThread = Thread({ renderLoop() }, "liveview-render").apply {
-        isDaemon = true
-        start()
-    }
-
-    private val decodeThread = Thread({ decodeLoop() }, "liveview-decode").apply {
         isDaemon = true
         start()
     }
@@ -178,7 +148,6 @@ class LiveviewPlayer {
         running = false
         stopStream()
         renderThread.interrupt()
-        decodeThread.interrupt()
     }
 
     // ---------------- Приём потока ----------------
@@ -188,8 +157,7 @@ class LiveviewPlayer {
      * Блокирующее чтение, поэтому остановка — через закрытие соединения.
      */
     suspend fun play(url: String) = withContext(Dispatchers.IO) {
-        lastSeq = -1
-        if (useRawSocket && rawSocketEnabled) {
+        if (useRawSocket) {
             val raw = try {
                 LiveviewConnection(url)
             } catch (e: Exception) {
@@ -220,23 +188,26 @@ class LiveviewPlayer {
         }
     }
 
-    /** Поток чтения: только принимает кадры и кладёт байты в очередь. */
     private fun readFrames(parser: LiveviewParser, alive: () -> Boolean) {
+        val opts = BitmapFactory.Options()
         while (alive()) {
-            val t0 = SystemClock.elapsedRealtime()
             parser.readNextImage()
+            val reuse = free.poll()
+            opts.inMutable = true
+            opts.inBitmap = reuse
+            val bmp = try {
+                BitmapFactory.decodeByteArray(parser.buffer, 0, parser.frameSize, opts)
+            } catch (e: IllegalArgumentException) {
+                // размер кадра поменялся — декодируем в новый Bitmap
+                opts.inBitmap = null
+                BitmapFactory.decodeByteArray(parser.buffer, 0, parser.frameSize, opts)
+            }
+            if (bmp == null) {
+                reuse?.let { free.offer(it) }
+                continue
+            }
             val now = SystemClock.elapsedRealtime()
-            val wait = now - t0
-            diagNetWaitMs.addAndGet(wait)
-            if (wait > diagNetWaitMax.get()) diagNetWaitMax.set(wait)
-
-            // Номера кадров: разница показывает, сколько кадров камера сняла между полученными
-            val seq = parser.sequence
-            val d = if (lastSeq < 0) 1 else ((seq - lastSeq) and 0xFFFF)
-            diagGenerated.addAndGet(if (d in 1..300) d else 1)
-            lastSeq = seq
-
-            // Средняя частота камеры
+            // Средняя частота камеры: считаем кадры за окна по 1 с и сглаживаем
             if (fpsWindowStart == 0L || now - lastFrameAt > 2_000) {
                 fpsWindowStart = now
                 fpsWindowCount = 0
@@ -252,57 +223,7 @@ class LiveviewPlayer {
             receivedCount.incrementAndGet()
             bytesWindow.addAndGet(parser.frameSize.toLong())
             calibrateClock(parser.timestampMs, now)
-
-            // Копия байтов кадра (буферы переиспользуются)
-            val size = parser.frameSize
-            var buf = bytePool.poll()
-            if (buf == null || buf.size < size) buf = ByteArray(maxOf(size, 96 * 1024))
-            System.arraycopy(parser.buffer, 0, buf, 0, size)
-            rawQueue.offer(RawFrame(buf, size, parser.timestampMs, now))
-            // Декодирование не успевает — выбрасываем самые старые сырые кадры
-            while (rawQueue.size > 6) {
-                rawQueue.poll()?.let { bytePool.offer(it.bytes) }
-                diagDroppedRaw.incrementAndGet()
-            }
-        }
-    }
-
-    /** Поток декодирования: JPEG → Bitmap → очередь показа. */
-    private fun decodeLoop() {
-        val opts = BitmapFactory.Options()
-        while (running) {
-            val raw = try {
-                rawQueue.poll(100, TimeUnit.MILLISECONDS)
-            } catch (_: InterruptedException) {
-                null
-            } ?: continue
-            val t0 = SystemClock.elapsedRealtime()
-            val reuse = free.poll()
-            opts.inMutable = true
-            opts.inBitmap = reuse
-            val bmp = try {
-                BitmapFactory.decodeByteArray(raw.bytes, 0, raw.size, opts)
-            } catch (e: IllegalArgumentException) {
-                // размер кадра поменялся — декодируем в новый Bitmap
-                opts.inBitmap = null
-                try {
-                    BitmapFactory.decodeByteArray(raw.bytes, 0, raw.size, opts)
-                } catch (_: Exception) {
-                    null
-                }
-            }
-            bytePool.offer(raw.bytes)
-            val dt = SystemClock.elapsedRealtime() - t0
-            diagDecodeMs.addAndGet(dt)
-            if (dt > diagDecodeMax.get()) diagDecodeMax.set(dt)
-            if (bmp == null) {
-                reuse?.let { free.offer(it) }
-                continue
-            }
-            diagDecoded.incrementAndGet()
-            frameW = bmp.width
-            frameH = bmp.height
-            ready.offerLast(Frame(bmp, raw.ts, raw.arrival))
+            ready.offerLast(Frame(bmp, parser.timestampMs, now))
             // Не копим отставание: лишние старые кадры выбрасываем
             while (ready.size > maxQueue()) {
                 ready.pollFirst()?.let { free.offer(it.bitmap) }
@@ -310,19 +231,27 @@ class LiveviewPlayer {
         }
     }
 
-    /**
-     * Метки времени камеры идут в миллисекундах (проверено по журналам a6600).
-     * Пересчитывать их не нужно — раньше оценка после пауз прыгала до 0.4–1.7 и сбивала показ.
-     * Отключаем их, только если они не растут.
-     */
+    /** Сравниваем ход часов камеры с часами телефона, чтобы узнать единицы меток времени. */
     private fun calibrateClock(ts: Long, now: Long) {
         if (calLastTs >= 0) {
             val dTs = ts - calLastTs
-            if (dTs > 0) {
+            val dArr = now - calLastArrival
+            if (dTs > 0 && dArr in 1..3_000) {
+                calSumTs += dTs
+                calSumArrival += dArr
                 calBad = 0
-                tsPerMs = 1.0
-            } else if (++calBad >= 5) {
-                tsPerMs = 0.0
+                if (calSumArrival >= 3_000) {
+                    val est = calSumTs / calSumArrival
+                    // Реальные часы камеры и телефона расходятся на сотые доли процента.
+                    // Оценка по времени прихода кадров шумная (Wi‑Fi пачки), поэтому
+                    // всё, что близко к 1, — это миллисекунды.
+                    tsPerMs = if (est in 0.7..1.4) 1.0 else est
+                    calSumTs = 0.0
+                    calSumArrival = 0.0
+                }
+            } else if (dTs <= 0) {
+                // Часы камеры не идут или скачут назад — не пользуемся ими
+                if (++calBad >= 5) tsPerMs = 0.0
             }
         }
         calLastTs = ts
@@ -357,10 +286,6 @@ class LiveviewPlayer {
         while (running) {
             if (clearRequested) {
                 clearRequested = false
-                while (true) {
-                    val r = rawQueue.poll() ?: break
-                    bytePool.offer(r.bytes)
-                }
                 while (true) {
                     val f = ready.pollFirst() ?: break
                     free.offer(f.bitmap)
@@ -471,26 +396,11 @@ class LiveviewPlayer {
             val shownFps = statFrames * 1000 / dt
             val receivedFrames = receivedCount.getAndSet(0)
             val receivedFps = receivedFrames * 1000L / dt
-            val bytes = bytesWindow.getAndSet(0)
-            val kb = if (receivedFrames > 0) bytes / receivedFrames / 1024 else 0
-            val kbPerSec = bytes * 1000 / dt / 1024
-            val generated = diagGenerated.getAndSet(0)
-            val generatedFps = generated * 1000L / dt
-            val netWait = diagNetWaitMs.getAndSet(0)
-            val netMax = diagNetWaitMax.getAndSet(0)
-            val decoded = diagDecoded.getAndSet(0)
-            val decMs = diagDecodeMs.getAndSet(0)
-            val decMax = diagDecodeMax.getAndSet(0)
-            val dropped = diagDroppedRaw.getAndSet(0)
+            val kb = if (receivedFrames > 0) bytesWindow.getAndSet(0) / receivedFrames / 1024 else 0
             val buf = if (bufferMs > 0) " · запас ${ready.size}" else ""
             val clock = if (tsPerMs > 0.0) " · часы %.2f".format(tsPerMs) else " · без часов"
             val qa = if (quickAckActive) " · QA" else ""
-            _stats.value = "камера $receivedFps (сняла $generatedFps) · показ $shownFps к/с · $kb КБ/кадр · пауза до $statMaxGap мс$buf$clock$qa"
-            _details.value = "снято=$generatedFps/с получено=$receivedFps/с показано=$shownFps/с" +
-                    " · ожидание кадра: ср ${if (receivedFrames > 0) netWait / receivedFrames else 0} мс, макс $netMax мс" +
-                    " · декод: ср ${if (decoded > 0) decMs / decoded else 0} мс, макс $decMax мс" +
-                    " · сброшено сырых $dropped · $kbPerSec КБ/с · $kb КБ/кадр · ${frameW}x$frameH" +
-                    " · пауза показа до $statMaxGap мс$buf$clock$qa · ${if (connection is LiveviewConnection) "сокет" else "стандарт"}"
+            _stats.value = "камера $receivedFps · показ $shownFps к/с · $kb КБ/кадр · пауза до $statMaxGap мс$buf$clock$qa"
             statFrames = 0
             statMaxGap = 0
             statStart = now

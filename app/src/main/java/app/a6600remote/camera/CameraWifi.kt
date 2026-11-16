@@ -34,10 +34,6 @@ class CameraWifi(context: Context) {
         null
     }
 
-    /** Сигнал, скорость и частота Wi‑Fi камеры — для диагностики. */
-    private val _linkInfo = kotlinx.coroutines.flow.MutableStateFlow("")
-    val linkInfo: kotlinx.coroutines.flow.StateFlow<String> = _linkInfo
-
     /** Вызывается, если сеть камеры пропала (камера выключилась, ушли слишком далеко). */
     var onLost: (() -> Unit)? = null
 
@@ -76,17 +72,6 @@ class CameraWifi(context: Context) {
                 result.completeExceptionally(
                     IllegalStateException("Не удалось подключиться к Wi‑Fi камеры")
                 )
-            }
-
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                val info = caps.transportInfo as? android.net.wifi.WifiInfo ?: return
-                val band = when {
-                    info.frequency >= 5_900 -> "6 ГГц"
-                    info.frequency >= 4_900 -> "5 ГГц"
-                    info.frequency > 0 -> "2.4 ГГц"
-                    else -> "?"
-                }
-                _linkInfo.value = "Wi‑Fi ${info.rssi} дБм · ${info.linkSpeed} Мбит/с · $band (${info.frequency} МГц)"
             }
 
             override fun onLost(network: Network) {

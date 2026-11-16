@@ -31,10 +31,6 @@ class LiveviewParser(input: InputStream) {
     var timestampMs = 0L
         private set
 
-    /** Номер кадра от камеры (16 бит, идёт по кругу). По пропускам видно, сколько кадров потеряно. */
-    var sequence = 0
-        private set
-
     /** Читает следующий JPEG-кадр в [buffer]. Бросает EOFException, если поток закончился. */
     fun readNextImage() {
         while (true) {
@@ -65,7 +61,6 @@ class LiveviewParser(input: InputStream) {
             if (type == 0x01 && size > 0) {
                 frameSize = size
                 timestampMs = ts
-                sequence = ((common[2].toInt() and 0xFF) shl 8) or (common[3].toInt() and 0xFF)
                 return
             }
             // тип 0x02 (рамки фокуса) пока пропускаем
