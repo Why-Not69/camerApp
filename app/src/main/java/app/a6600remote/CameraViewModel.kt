@@ -97,6 +97,8 @@ data class UiState(
     val mirror: Boolean = false,
     val previewBufferMs: Int = 600,
     val showFps: Boolean = false,
+    /** Слать камере мелкие пакеты, чтобы Wi‑Fi телефона не уходил в экономию энергии. */
+    val wifiKeepAwake: Boolean = true,
     val showGrid: Boolean = false,
     val busy: Boolean = false,
     val recordingSince: Long? = null,
@@ -174,6 +176,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             mirror = prefs.getBoolean("mirror", false),
             previewBufferMs = prefs.getInt("bufferMs", 600),
             showFps = prefs.getBoolean("showFps", false),
+            wifiKeepAwake = prefs.getBoolean("wifiKeepAwake", true),
             showGrid = prefs.getBoolean("showGrid", false),
         )
     )
@@ -276,6 +279,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             // Два параллельных цикла: превью и опрос состояния камеры.
             coroutineScope {
                 launch { liveviewLoop(api) }
+                launch { wifiKeepAwakeLoop(api) }
                 eventLoop(api)
             }
         } catch (e: CancellationException) {
@@ -305,6 +309,40 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             if (names.any { it in apis }) break
         }
         return apis
+    }
+
+    /**
+     * Через полминуты после подключения телефон переводит Wi‑Fi в экономию энергии:
+     * радио спит между «маяками» камеры, и кадры приходят пачками с паузами ~300 мс.
+     * Пока идёт обмен пакетами, радио не засыпает — поэтому шлём камере по байту каждые 20 мс.
+     */
+    private suspend fun wifiKeepAwakeLoop(api: SonyCameraApi) = withContext(Dispatchers.IO) {
+        val host = try {
+            java.net.InetAddress.getByName(java.net.URL(api.endpoint).host)
+        } catch (_: Exception) {
+            return@withContext
+        }
+        val packet = java.net.DatagramPacket(ByteArray(1), 1, host, 9)   // порт 9 — «discard»
+        var socket: java.net.DatagramSocket? = null
+        try {
+            while (isActive) {
+                if (_state.value.wifiKeepAwake && !albumMode) {
+                    try {
+                        val so = socket ?: java.net.DatagramSocket().also { socket = it }
+                        so.send(packet)
+                    } catch (_: Exception) {
+                        try { socket?.close() } catch (_: Exception) {}
+                        socket = null
+                        delay(500)
+                    }
+                    delay(20)
+                } else {
+                    delay(300)
+                }
+            }
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
     }
 
     private suspend fun liveviewLoop(api: SonyCameraApi) {
@@ -762,6 +800,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         val next = !_state.value.showGrid
         prefs.edit().putBoolean("showGrid", next).apply()
         _state.update { it.copy(showGrid = next) }
+    }
+
+    fun setWifiKeepAwake(on: Boolean) {
+        prefs.edit().putBoolean("wifiKeepAwake", on).apply()
+        _state.update { it.copy(wifiKeepAwake = on) }
+        log("Не давать Wi‑Fi засыпать: ${if (on) "вкл" else "выкл"}")
     }
 
     fun setShowFps(on: Boolean) {

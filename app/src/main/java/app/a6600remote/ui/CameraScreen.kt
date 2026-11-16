@@ -320,6 +320,7 @@ fun CameraScreen(vm: CameraViewModel) {
             s = s,
             onBuffer = vm::setPreviewBuffer,
             onShowFps = vm::setShowFps,
+            onWifiKeepAwake = vm::setWifiKeepAwake,
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
             onRecordState = vm::recordCameraState,
@@ -1057,6 +1058,7 @@ private fun SettingsDialog(
     s: UiState,
     onBuffer: (Int) -> Unit,
     onShowFps: (Boolean) -> Unit,
+    onWifiKeepAwake: (Boolean) -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
     onRecordState: () -> Unit,
@@ -1156,6 +1158,10 @@ private fun SettingsDialog(
                         SettingSwitch(
                             "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
                             s.showFps, onShowFps, switchColors,
+                        )
+                        SettingSwitch(
+                            "Не давать Wi‑Fi засыпать", "Постоянный обмен мелкими пакетами с камерой — против пауз в превью",
+                            s.wifiKeepAwake, onWifiKeepAwake, switchColors,
                         )
                         OutlinedButton(onClick = onRecordState, modifier = Modifier.fillMaxWidth()) {
                             Text("Записать состояние камеры", color = Color.White)
