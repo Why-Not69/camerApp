@@ -1086,6 +1086,110 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------- Отладка: снимок состояния камеры ----------------
+
+    private var lastSnapshot: Map<String, String>? = null
+    private var snapshotNo = 0
+
+    /**
+     * Записывает в журнал всё, что камера сообщает о себе, и сравнивает с прошлым снимком.
+     * Нужно, чтобы найти настройку, после которой превью начинает тормозить.
+     */
+    fun recordCameraState() {
+        val a = api
+        if (a == null) {
+            toast("Сначала подключитесь к камере")
+            return
+        }
+        viewModelScope.launch(crashGuard) {
+            val n = ++snapshotNo
+            val snap = LinkedHashMap<String, String>()
+            // getEvent: новые версии отдают больше полей — пробуем от новой к старой
+            var ev: JSONArray? = null
+            val evErrors = ArrayList<String>()
+            for (v in listOf("1.3", "1.2", "1.1", "1.0")) {
+                for (attempt in 0 until 3) {
+                    ev = try {
+                        a.call("getEvent", JSONArray().put(false), version = v, timeoutMs = 4_000)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: CameraApiException) {
+                        evErrors += "$v: ${e.code}"
+                        if (e.code == 40402) {          // идёт фоновый опрос — подождать
+                            delay(700)
+                            continue
+                        }
+                        null
+                    } catch (e: Exception) {
+                        evErrors += "$v: ${e.message}"
+                        null
+                    }
+                    break
+                }
+                if (ev != null) {
+                    snap["getEvent версия"] = v
+                    break
+                }
+            }
+            if (ev == null) log("getEvent не ответил: ${evErrors.joinToString()}")
+            if (ev != null) {
+                for (i in 0 until ev.length()) {
+                    val o = ev.opt(i)
+                    if (o == null || o == JSONObject.NULL) continue
+                    val key = when (o) {
+                        is JSONObject -> o.optString("type").ifEmpty { "#$i" }
+                        is JSONArray -> {
+                            val t = (0 until o.length()).firstNotNullOfOrNull { j ->
+                                (o.opt(j) as? JSONObject)?.optString("type")?.ifEmpty { null }
+                            }
+                            t ?: "#$i"
+                        }
+                        else -> "#$i"
+                    }
+                    snap[if (snap.containsKey(key)) "$key#$i" else key] = o.toString()
+                }
+            }
+            // Отдельные запросы, которых может не быть в getEvent
+            for (m in listOf(
+                "getShootMode", "getExposureMode", "getContShootingMode", "getSelfTimer",
+                "getFlashMode", "getMovieQuality", "getMovieFileFormat", "getApplicationInfo",
+            )) {
+                snap[m] = try {
+                    a.call(m, timeoutMs = 3_000).toString()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "ошибка: ${e.message}"
+                }
+            }
+
+            log("=== Состояние камеры №$n · превью: ${player.stats.value} ===")
+            val prev = lastSnapshot
+            if (prev == null) {
+                for ((k, v) in snap) log("$k: $v")
+                log("=== конец снимка №$n — сделайте второй после MENU, приложение покажет разницу ===")
+            } else {
+                var diffs = 0
+                for (k in (prev.keys + snap.keys).distinct()) {
+                    val old = prev[k]
+                    val new = snap[k]
+                    if (old != new) {
+                        diffs++
+                        log("ИЗМЕНИЛОСЬ $k:")
+                        log("   было: ${old ?: "—"}")
+                        log("   стало: ${new ?: "—"}")
+                    }
+                }
+                if (diffs == 0) log("По сравнению с №${n - 1} камера ничего не сообщила об изменениях")
+                log("Полный снимок №$n:")
+                for ((k, v) in snap) log("$k: $v")
+                log("=== конец снимка №$n ===")
+            }
+            lastSnapshot = snap
+            toast("Снимок состояния №$n записан в журнал")
+        }
+    }
+
     private fun toast(text: String) {
         messageJob?.cancel()
         _state.update { it.copy(message = text) }
@@ -1097,7 +1201,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun log(line: String) {
         val stamped = "${timeFormat.format(Date())}  $line"
-        _state.update { it.copy(log = (it.log + stamped).takeLast(300)) }
+        _state.update { it.copy(log = (it.log + stamped).takeLast(800)) }
     }
 
     /** Лог из фонового потока (поиск камеры). */

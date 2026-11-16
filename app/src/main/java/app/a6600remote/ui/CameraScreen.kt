@@ -322,6 +322,7 @@ fun CameraScreen(vm: CameraViewModel) {
             onShowFps = vm::setShowFps,
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
+            onRecordState = vm::recordCameraState,
             onDisconnect = { showSettings = false; vm.disconnect() },
             onSave = { ssid, pass ->
                 vm.saveWifi(ssid, pass)
@@ -1058,6 +1059,7 @@ private fun SettingsDialog(
     onShowFps: (Boolean) -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
+    onRecordState: () -> Unit,
     onDisconnect: () -> Unit,
     onSave: (String, String) -> Unit,
     onDismiss: () -> Unit,
@@ -1155,6 +1157,9 @@ private fun SettingsDialog(
                             "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
                             s.showFps, onShowFps, switchColors,
                         )
+                        OutlinedButton(onClick = onRecordState, modifier = Modifier.fillMaxWidth()) {
+                            Text("Записать состояние камеры", color = Color.White)
+                        }
                         OutlinedButton(onClick = onShowLog, modifier = Modifier.fillMaxWidth()) {
                             Text("Журнал", color = Color.White)
                         }
