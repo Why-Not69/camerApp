@@ -98,6 +98,8 @@ data class UiState(
     val previewBufferMs: Int = 600,
     val showFps: Boolean = false,
     val showGrid: Boolean = false,
+    val rawSocket: Boolean = true,
+    val diagRunning: Boolean = false,
     val busy: Boolean = false,
     val recordingSince: Long? = null,
     val lastShot: String? = null,
@@ -175,6 +177,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             previewBufferMs = prefs.getInt("bufferMs", 600),
             showFps = prefs.getBoolean("showFps", false),
             showGrid = prefs.getBoolean("showGrid", false),
+            rawSocket = prefs.getBoolean("rawSocket", true),
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -203,6 +206,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     init {
         player.mirror = _state.value.mirror
         player.bufferMs = _state.value.previewBufferMs
+        player.rawSocketEnabled = _state.value.rawSocket
         wifi.onLost = {
             viewModelScope.launch { onConnectionLost("Wi‑Fi камеры пропал") }
         }
@@ -756,6 +760,38 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putInt("bufferMs", ms).apply()
         player.bufferMs = ms
         _state.update { it.copy(previewBufferMs = ms) }
+    }
+
+    /** Wi‑Fi сигнал камеры (для счётчика и диагностики). */
+    val wifiInfo get() = wifi.linkInfo
+
+    fun setRawSocket(on: Boolean) {
+        prefs.edit().putBoolean("rawSocket", on).apply()
+        player.rawSocketEnabled = on
+        _state.update { it.copy(rawSocket = on) }
+        player.stopStream()   // переподключить превью новым способом
+    }
+
+    /** 30 секунд пишем в журнал подробную статистику превью раз в секунду. */
+    fun recordDiagnostics() {
+        if (_state.value.diagRunning) return
+        _state.update { it.copy(diagRunning = true) }
+        viewModelScope.launch {
+            val s = _state.value
+            log("=== Диагностика превью: старт ===")
+            log("Режим ${s.shootMode}, выдержка ${s.shutter}, ISO ${s.iso}, F ${s.fNumber}, EV ${s.ev?.index}, ББ ${s.wb}, зум ${s.zoomPosition}")
+            log("Плавность ${s.previewBufferMs} мс, способ чтения: ${if (s.rawSocket) "свой сокет" else "стандартный"}")
+            try {
+                repeat(30) {
+                    delay(1_000)
+                    log("${player.details.value} | ${wifi.linkInfo.value}")
+                }
+            } finally {
+                log("=== Диагностика превью: конец ===")
+                _state.update { it.copy(diagRunning = false) }
+                toast("Диагностика записана: ⚙ → Журнал → Копировать")
+            }
+        }
     }
 
     fun toggleGrid() {

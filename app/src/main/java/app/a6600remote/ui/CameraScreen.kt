@@ -94,6 +94,7 @@ fun CameraScreen(vm: CameraViewModel) {
     val s by vm.state.collectAsState()
     val hasPicture by vm.player.hasPicture.collectAsState()
     val stats by vm.player.stats.collectAsState()
+    val wifiInfo by vm.wifiInfo.collectAsState()
     val frameAspect by vm.player.frameAspect.collectAsState()
 
     var activeParam by remember { mutableStateOf<ExpParam?>(null) }
@@ -197,7 +198,7 @@ fun CameraScreen(vm: CameraViewModel) {
 
             TopBar(
                 s = s,
-                fps = if (s.showFps) stats else null,
+                fps = if (s.showFps) listOf(stats, wifiInfo).filter { it.isNotEmpty() }.joinToString("\n") else null,
                 onGrid = vm::toggleGrid,
                 onMirror = vm::toggleMirror,
                 onSettings = { showSettings = true },
@@ -320,6 +321,8 @@ fun CameraScreen(vm: CameraViewModel) {
             s = s,
             onBuffer = vm::setPreviewBuffer,
             onShowFps = vm::setShowFps,
+            onRawSocket = vm::setRawSocket,
+            onRecordDiag = { showSettings = false; vm.recordDiagnostics() },
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
             onDisconnect = { showSettings = false; vm.disconnect() },
@@ -1056,6 +1059,8 @@ private fun SettingsDialog(
     s: UiState,
     onBuffer: (Int) -> Unit,
     onShowFps: (Boolean) -> Unit,
+    onRawSocket: (Boolean) -> Unit,
+    onRecordDiag: () -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
     onDisconnect: () -> Unit,
@@ -1110,6 +1115,17 @@ private fun SettingsDialog(
                     "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
                     s.showFps, onShowFps, switchColors,
                 )
+                SettingSwitch(
+                    "Свой сокет для превью", "Выкл — стандартный способ, как до версии 0.7 (для сравнения)",
+                    s.rawSocket, onRawSocket, switchColors,
+                )
+                OutlinedButton(
+                    onClick = onRecordDiag,
+                    enabled = s.phase == Phase.Ready && !s.diagRunning,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (s.diagRunning) "Идёт запись диагностики…" else "Записать диагностику 30 с", color = Color.White)
+                }
                 HorizontalDivider(color = GlassBorder)
 
                 Text("Wi‑Fi камеры", color = Color.White, fontWeight = FontWeight.SemiBold)
