@@ -322,6 +322,7 @@ fun CameraScreen(vm: CameraViewModel) {
             onBuffer = vm::setPreviewBuffer,
             onShowFps = vm::setShowFps,
             onRawSocket = vm::setRawSocket,
+            onEventPolling = vm::setEventPolling,
             onRecordDiag = { showSettings = false; vm.recordDiagnostics() },
             onScanQr = scanQr,
             onShowLog = { showSettings = false; showDiagnostics = true },
@@ -1060,6 +1061,7 @@ private fun SettingsDialog(
     onBuffer: (Int) -> Unit,
     onShowFps: (Boolean) -> Unit,
     onRawSocket: (Boolean) -> Unit,
+    onEventPolling: (Int) -> Unit,
     onRecordDiag: () -> Unit,
     onScanQr: () -> Unit,
     onShowLog: () -> Unit,
@@ -1115,6 +1117,35 @@ private fun SettingsDialog(
                     "Показывать FPS", "Частота кадров и паузы превью — для проверки связи",
                     s.showFps, onShowFps, switchColors,
                 )
+                Text("Опрос состояния камеры", color = Color.White)
+                Text(
+                    "Каждый опрос ненадолго отвлекает камеру от превью. «Редко» — раз в 4 с.",
+                    fontSize = 12.sp,
+                    color = Dim,
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF26262B)),
+                ) {
+                    listOf(0 to "Выкл", 1 to "Редко", 2 to "Постоянно").forEach { (mode, label) ->
+                        val sel = s.eventPolling == mode
+                        Text(
+                            label,
+                            color = if (sel) Color.Black else Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (sel) Accent else Color.Transparent)
+                                .clickable { onEventPolling(mode) }
+                                .padding(vertical = 10.dp),
+                        )
+                    }
+                }
                 SettingSwitch(
                     "Свой сокет для превью", "Выкл — стандартный способ, как до версии 0.7 (для сравнения)",
                     s.rawSocket, onRawSocket, switchColors,

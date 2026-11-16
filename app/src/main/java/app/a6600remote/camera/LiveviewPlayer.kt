@@ -310,27 +310,19 @@ class LiveviewPlayer {
         }
     }
 
-    /** Сравниваем ход часов камеры с часами телефона, чтобы узнать единицы меток времени. */
+    /**
+     * Метки времени камеры идут в миллисекундах (проверено по журналам a6600).
+     * Пересчитывать их не нужно — раньше оценка после пауз прыгала до 0.4–1.7 и сбивала показ.
+     * Отключаем их, только если они не растут.
+     */
     private fun calibrateClock(ts: Long, now: Long) {
         if (calLastTs >= 0) {
             val dTs = ts - calLastTs
-            val dArr = now - calLastArrival
-            if (dTs > 0 && dArr in 1..3_000) {
-                calSumTs += dTs
-                calSumArrival += dArr
+            if (dTs > 0) {
                 calBad = 0
-                if (calSumArrival >= 3_000) {
-                    val est = calSumTs / calSumArrival
-                    // Реальные часы камеры и телефона расходятся на сотые доли процента.
-                    // Оценка по времени прихода кадров шумная (Wi‑Fi пачки), поэтому
-                    // всё, что близко к 1, — это миллисекунды.
-                    tsPerMs = if (est in 0.7..1.4) 1.0 else est
-                    calSumTs = 0.0
-                    calSumArrival = 0.0
-                }
-            } else if (dTs <= 0) {
-                // Часы камеры не идут или скачут назад — не пользуемся ими
-                if (++calBad >= 5) tsPerMs = 0.0
+                tsPerMs = 1.0
+            } else if (++calBad >= 5) {
+                tsPerMs = 0.0
             }
         }
         calLastTs = ts

@@ -99,6 +99,8 @@ data class UiState(
     val showFps: Boolean = false,
     val showGrid: Boolean = false,
     val rawSocket: Boolean = true,
+    /** Опрос состояния камеры: 0 — выкл, 1 — редко (раз в 4 с), 2 — постоянно (как раньше). */
+    val eventPolling: Int = 1,
     val diagRunning: Boolean = false,
     val busy: Boolean = false,
     val recordingSince: Long? = null,
@@ -178,6 +180,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             showFps = prefs.getBoolean("showFps", false),
             showGrid = prefs.getBoolean("showGrid", false),
             rawSocket = prefs.getBoolean("rawSocket", true),
+            eventPolling = prefs.getInt("eventPolling", 1),
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -338,28 +341,38 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Опрос состояния камеры. Каждый ответ getEvent — большой JSON, и пока камера его
+     * собирает, превью может замирать. Поэтому по умолчанию спрашиваем редко.
+     */
     private suspend fun eventLoop(api: SonyCameraApi) {
         var fails = 0
-        var longPoll = false          // первый запрос — сразу всё состояние
+        var first = true
         var longPollSupported = true
         while (currentCoroutineContext().isActive) {
+            val mode = _state.value.eventPolling
+            if (!first && mode == 0) {
+                // Опрос выключен: только проверяем, жива ли связь, если превью замолчало
+                delay(2_000)
+                val silent = SystemClock.elapsedRealtime() - player.lastFrameAt > 15_000
+                if (!silent || albumMode) continue
+            }
             val started = SystemClock.elapsedRealtime()
+            val longPoll = !first && mode == 2 && longPollSupported
             try {
-                applyEvent(api.getEvent(longPoll = longPoll && longPollSupported))
+                fetchEvent(api, longPoll)
                 if (fails >= 3) log("Камера снова отвечает")
                 fails = 0
-                longPoll = true
+                first = false
             } catch (e: CancellationException) {
                 throw e
             } catch (e: java.net.SocketTimeoutException) {
-                // Долгий опрос: за 35 с ничего не изменилось — это нормально,
-                // если превью при этом идёт. Иначе считаем это сбоем.
                 val noFrames = SystemClock.elapsedRealtime() - player.lastFrameAt > 10_000
                 if (noFrames && !albumMode && !_state.value.cameraInPlayback) fails += 3
             } catch (e: CameraApiException) {
                 when (e.code) {
-                    40402 -> delay(1_000)                     // уже идёт другой опрос
-                    12, 14 -> {                               // долгий опрос не поддерживается
+                    40402 -> delay(1_000)
+                    12, 14 -> {
                         if (longPollSupported) log("getEvent: опрос без ожидания")
                         longPollSupported = false
                     }
@@ -369,22 +382,62 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 fails++
                 if (fails == 3) log("Камера не отвечает: ${e.message}")
             }
-            // Переподключаемся, только если камера долго молчит
             if (fails >= 6) {
                 onConnectionLost("Связь с камерой потеряна")
                 return
             }
             val elapsed = SystemClock.elapsedRealtime() - started
-            // Если камера отвечает на долгий опрос мгновенно — не заваливаем её запросами
             delay(
                 when {
                     fails > 0 -> 1_500L
+                    mode == 1 -> 4_000L          // редко
+                    mode == 0 -> 0L
                     !longPollSupported -> 1_500L
                     elapsed < 300 -> 700L
                     else -> 100L
                 }
             )
         }
+    }
+
+    // ---- Учёт запросов состояния (для диагностики) ----
+    private val evCalls = java.util.concurrent.atomic.AtomicInteger(0)
+    private val evMs = java.util.concurrent.atomic.AtomicLong(0)
+    private val evMaxMs = java.util.concurrent.atomic.AtomicLong(0)
+    private val evChanged = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+    private var lastEventParts: Map<String, String> = emptyMap()
+
+    /** Запрос getEvent с замером времени и учётом того, что изменилось. */
+    private suspend fun fetchEvent(api: SonyCameraApi, longPoll: Boolean) {
+        val t0 = SystemClock.elapsedRealtime()
+        val arr = api.getEvent(longPoll)
+        val dt = SystemClock.elapsedRealtime() - t0
+        evCalls.incrementAndGet()
+        // для долгого опроса время ожидания не показательно — считаем только короткие
+        if (!longPoll) {
+            evMs.addAndGet(dt)
+            if (dt > evMaxMs.get()) evMaxMs.set(dt)
+        }
+        val parts = HashMap<String, String>()
+        for (i in 0 until arr.length()) {
+            val o = arr.opt(i)
+            val key = (o as? JSONObject)?.optString("type")?.ifEmpty { null } ?: "#$i"
+            if (o != null && o != JSONObject.NULL) parts[key] = o.toString()
+        }
+        if (lastEventParts.isNotEmpty()) {
+            for ((k, v) in parts) if (lastEventParts[k] != v) evChanged.add(k)
+        }
+        lastEventParts = parts
+        applyEvent(arr)
+    }
+
+    private fun takeEventStats(): String {
+        val n = evCalls.getAndSet(0)
+        val ms = evMs.getAndSet(0)
+        val max = evMaxMs.getAndSet(0)
+        val changed = synchronized(evChanged) { evChanged.joinToString(",").also { evChanged.clear() } }
+        return "события: $n запр." + (if (n > 0) " ср ${ms / n} мс макс $max мс" else "") +
+                (if (changed.isNotEmpty()) " изм: $changed" else "")
     }
 
     private fun onConnectionLost(reason: String) {
@@ -556,7 +609,10 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         if (s.isRecording) {
-            runAction("Стоп записи") { api.stopMovieRec() }
+            runAction("Стоп записи") {
+                api.stopMovieRec()
+                _state.update { it.copy(cameraStatus = "IDLE", recordingSince = null) }
+            }
             return
         }
 
@@ -567,7 +623,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             }
             _state.update { it.copy(countdown = 0) }
             if (s.isMovieMode) {
-                runAction("Старт записи") { api.startMovieRec() }
+                runAction("Старт записи") {
+                    api.startMovieRec()
+                    _state.update {
+                        it.copy(cameraStatus = "MovieRecording", recordingSince = SystemClock.elapsedRealtime())
+                    }
+                }
             } else {
                 runAction("Снимок") { focusAndShoot(api) }
             }
@@ -614,7 +675,7 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             if (fs == "Focused" || fs == "Failed") return fs
             // Если долгий опрос событий молчит — спросим сами
             try {
-                applyEvent(api.getEvent(longPoll = false))
+                fetchEvent(api, longPoll = false)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -765,6 +826,12 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
     /** Wi‑Fi сигнал камеры (для счётчика и диагностики). */
     val wifiInfo get() = wifi.linkInfo
 
+    fun setEventPolling(mode: Int) {
+        prefs.edit().putInt("eventPolling", mode).apply()
+        _state.update { it.copy(eventPolling = mode) }
+        log("Опрос камеры: ${when (mode) { 0 -> "выкл"; 1 -> "редко"; else -> "постоянно" }}")
+    }
+
     fun setRawSocket(on: Boolean) {
         prefs.edit().putBoolean("rawSocket", on).apply()
         player.rawSocketEnabled = on
@@ -780,11 +847,15 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
             val s = _state.value
             log("=== Диагностика превью: старт ===")
             log("Режим ${s.shootMode}, выдержка ${s.shutter}, ISO ${s.iso}, F ${s.fNumber}, EV ${s.ev?.index}, ББ ${s.wb}, зум ${s.zoomPosition}")
-            log("Плавность ${s.previewBufferMs} мс, способ чтения: ${if (s.rawSocket) "свой сокет" else "стандартный"}")
+            log(
+                "Плавность ${s.previewBufferMs} мс, способ чтения: ${if (s.rawSocket) "свой сокет" else "стандартный"}, " +
+                        "опрос камеры: ${when (s.eventPolling) { 0 -> "выкл"; 1 -> "редко"; else -> "постоянно" }}"
+            )
+            takeEventStats()   // сбросить накопленное до старта
             try {
                 repeat(30) {
                     delay(1_000)
-                    log("${player.details.value} | ${wifi.linkInfo.value}")
+                    log("${player.details.value} | ${takeEventStats()} | ${wifi.linkInfo.value}")
                 }
             } finally {
                 log("=== Диагностика превью: конец ===")
@@ -858,7 +929,16 @@ class CameraViewModel(app: Application) : AndroidViewModel(app) {
                 if (want == null && !zoomDragging) break
                 // Защита: если камера перестала сообщать положение — не крутим вечно
                 if (!zoomDragging && SystemClock.elapsedRealtime() - startedAt > 15_000) break
-                delay(50)
+                // Положение зума узнаём сами — фоновый опрос может быть редким или выключен
+                if (moving != null) {
+                    try {
+                        fetchEvent(api, longPoll = false)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                    }
+                }
+                delay(80)
             }
         } finally {
             moving?.let { m -> withContext(NonCancellable) { safeZoom(api, m, "stop") } }
